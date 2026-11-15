@@ -1,0 +1,74 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self' https://*.supabase.co wss://*.supabase.co; font-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'">
+<meta name="robots" content="noindex, nofollow">
+<meta name="theme-color" content="#1f1b16">
+<title>نظام المبيعات الهاتفية والعمولات — العز للعود</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div id="boot" class="boot">جارٍ التحميل…</div>
+
+<section id="auth" class="auth" hidden>
+  <div class="auth-card">
+    <h1>المبيعات الهاتفية والعمولات</h1>
+    <p class="muted">العز للعود — نظام داخلي</p>
+    <div class="tabs2" role="tablist">
+      <button type="button" data-auth-tab="login" class="on">تسجيل الدخول</button>
+      <button type="button" data-auth-tab="register">حساب جديد</button>
+    </div>
+    <form id="authForm" autocomplete="on">
+      <label class="reg-only" hidden>الاسم الكامل<input id="fName" type="text" autocomplete="name"></label>
+      <label>اسم المستخدم أو البريد<input id="fUser" type="text" autocomplete="username" required dir="ltr"></label>
+      <label>كلمة المرور<input id="fPass" type="password" autocomplete="current-password" minlength="8" required dir="ltr"></label>
+      <button class="btn primary" type="submit" id="authBtn">دخول</button>
+      <p id="authMsg" class="msg" role="alert"></p>
+    </form>
+    <p class="muted small">الحساب الجديد يبقى «بانتظار التفعيل» حتى يفعّله مدير النظام.</p>
+  </div>
+  <p class="credit">تصميم وتطوير: أحمد سيد — مدير النمو</p>
+</section>
+
+<section id="wait" class="auth" hidden>
+  <div class="auth-card">
+    <h1>حسابك بانتظار التفعيل</h1>
+    <p class="muted">سيفعّل مدير النظام حسابك ويحدد صلاحياتك. بعد ذلك اضغط «تحديث».</p>
+    <div class="row"><button class="btn primary" id="waitRefresh" type="button">تحديث</button><button class="btn" data-act="logout" type="button">خروج</button></div>
+  </div>
+</section>
+
+<div id="app" hidden>
+  <header class="top">
+    <div class="brand">
+      <strong>المبيعات الهاتفية والعمولات</strong>
+      <span class="credit">تصميم وتطوير: أحمد سيد — مدير النمو</span>
+    </div>
+    <div class="top-r">
+      <label class="monthsel">الشهر <select id="monthSel"></select></label>
+      <span id="userChip" class="chip"></span>
+      <button class="btn small" data-act="logout" type="button">خروج</button>
+    </div>
+  </header>
+  <div id="banner"></div>
+  <nav id="nav" class="nav" aria-label="الأقسام"></nav>
+  <main id="view" class="view" tabindex="-1"></main>
+</div>
+
+<div id="dlg" class="dlg" hidden>
+  <div class="dlg-box" role="dialog" aria-modal="true" aria-labelledby="dlgTitle">
+    <div class="dlg-h"><h3 id="dlgTitle"></h3><button type="button" class="x" data-act="dlg-close" aria-label="إغلاق">×</button></div>
+    <div id="dlgBody" class="dlg-b"></div>
+  </div>
+</div>
+<div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
+
+<script src="vendor/supabase.js"></script>
+<script src="vendor/chart.umd.js"></script>
+<script src="vendor/xlsx.full.min.js"></script>
+<script src="config.js"></script>
+<script src="app.js"></script>
+</body>
+</html>

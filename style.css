@@ -93,3 +93,6 @@ tr.clk{cursor:pointer}tr.clk:hover td{background:#fbf8f2}
 .grid2>*,.cards>*{min-width:0}
 input[type=file]{width:100%;max-width:100%;min-height:0;padding:.4rem}
 .top .btn{color:var(--ink);background:#fff}
+.logo{display:block;width:210px;max-width:70%;height:auto;margin:0 auto .8rem}
+.logo-top{height:30px;width:auto;filter:invert(1);margin-inline-end:.2rem}
+.top{justify-content:flex-start}.top .top-r{margin-inline-start:auto}

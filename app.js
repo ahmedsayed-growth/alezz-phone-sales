@@ -47,10 +47,11 @@
   function fmtD(iso) { return iso ? fmtParts(iso, false) : '—'; }
   function monthLabel(m) { var p = m.split('-'); return AR_MONTHS[Number(p[1]) - 1] + ' ' + p[0]; }
   function nextMonth(m) { var p = m.split('-').map(Number); var y = p[0], mo = p[1] + 1; if (mo > 12) { mo = 1; y++; } return y + '-' + String(mo).padStart(2, '0') + '-01'; }
+  function monthEnd(m) { var d = new Date(Number(m.slice(0, 4)), Number(m.slice(5, 7)), 0).getDate(); return m.slice(0, 8) + String(d).padStart(2, '0') + 'T23:59:59+03:00'; }
   function riyadhStart(m) { return m + 'T00:00:00+03:00'; }
   function todayRiyadh() { return new Intl.DateTimeFormat('en-CA', { timeZone: TZ }).format(new Date()); }
   function toast(msg, kind) { var t = $('#toast'); t.textContent = msg; t.className = 'toast ' + (kind || ''); t.hidden = false; clearTimeout(toast._t); toast._t = setTimeout(function () { t.hidden = true; }, kind === 'bad' ? 6500 : 3200); }
-  function errText(e) { var m = (e && e.message) || String(e); if (/permission denied|row-level security|violates/i.test(m)) return 'غير مصرح لك بهذا الإجراء'; if (/Failed to fetch|NetworkError/i.test(m)) return 'تعذّر الاتصال — تحقق من الإنترنت'; return m; }
+  function errText(e) { var m = (e && e.message) || String(e); if (/foreign key/i.test(m)) return 'لا يمكن الحذف: توجد سجلات مرتبطة — استخدم «إنهاء خدمة»'; if (/permission denied|row-level security|violates/i.test(m)) return 'غير مصرح لك بهذا الإجراء'; if (/Failed to fetch|NetworkError/i.test(m)) return 'تعذّر الاتصال — تحقق من الإنترنت'; return m; }
   function fail(e) { console.error(e); toast(errText(e), 'bad'); }
   function can(what) {
     var r = S.role;
@@ -155,8 +156,15 @@
   /* ---------- dashboard ---------- */
   async function vDash(v) {
     var m = S.month;
-    var res = await Promise.all([rpc('ps_statement', { p_month: m }), rpc('ps_leaderboard', { p_month: m }), rpc('ps_daily_series', { p_month: m })]);
-    var st = res[0] || [], lb = res[1] || [], ser = res[2] || [];
+    var soft = function (p) { return p.catch(function (e) { console.error(e); return []; }); };
+    var res = await Promise.all([rpc('ps_statement', { p_month: m }), rpc('ps_leaderboard', { p_month: m }), rpc('ps_daily_series', { p_month: m }), soft(rpc('ps_growth', { p_month: m })), soft(rpc('ps_monthly_trend', { p_month: m }))]);
+    var st = res[0] || [], lb = res[1] || [], ser = res[2] || [], gr = res[3] || [], trend = res[4] || [];
+    var grBy = {}, gCur = 0, gPrev = 0; gr.forEach(function (g) { grBy[g.employee_id] = g; gCur += Number(g.current_value || 0); gPrev += Number(g.previous_value || 0); });
+    var teamGrowth = gPrev > 0 ? (gCur - gPrev) / gPrev : null;
+    var tiers = []; if (st.length && st[0].rule_version != null) { tiers = (await soft(sel(S.sb.from('ps_commission_tiers').select('*').eq('version', st[0].rule_version).order('from_pct')))) || []; }
+    var steps = tiers.filter(function (t) { return Number(t.rate) > 0; }).map(function (t) { return Number(t.from_pct); }); if (tiers.length) steps.push(1);
+    function nextStep(r) { if (r.target == null || !Number(r.target)) return '—'; var a = Number(r.achievement || 0); var nx = steps.find(function (x) { return x > a + 1e-9; }); if (nx == null) return 'تجاوز الهدف ✓'; return num(Math.max(0, nx * Number(r.target) - Number(r.eligible_value)), 0) + ' ر.س لبلوغ ' + Math.round(nx * 100) + '%'; }
+    function growthHtml(g) { if (g == null) return '<span class="muted">—</span>'; var up = g >= 0; return '<span class="gr ' + (up ? 'up' : 'dn') + '">' + (up ? '▲ ' : '▼ ') + Math.abs(g * 100).toFixed(1) + '%</span>'; }
     var tot = st.reduce(function (a, r) { a.val += Number(r.eligible_value || 0); a.tgt += Number(r.target || 0); a.comm += Number(r.commission || 0); a.n += Number(r.orders_count || 0); return a; }, { val: 0, tgt: 0, comm: 0, n: 0 });
     var ach = tot.tgt > 0 ? tot.val / tot.tgt : null;
     var status = st.length ? st[0].status : 'live'; var locked = st.length && st[0].locked;
@@ -165,16 +173,21 @@
       '<div class="card"><div class="k">المحقَّق (طلبات مُسلَّمة مؤهلة)</div><div class="v">' + money(tot.val) + '</div><div class="s">' + num(tot.n) + ' طلب</div></div>' +
       '<div class="card"><div class="k">المستهدف</div><div class="v">' + (tot.tgt ? money(tot.tgt) : '—') + '</div><div class="s">' + (tot.tgt ? '' : 'لا توجد خطة معتمدة لهذا الشهر') + '</div></div>' +
       '<div class="card"><div class="k">نسبة التحقيق</div><div class="v">' + pct(ach) + '</div><div class="s">' + (ach == null ? '' : '<div class="bar"><i style="width:' + Math.min(100, ach * 100) + '%;background:' + tierColor(ach) + '"></i></div>') + '</div></div>' +
+      '<div class="card"><div class="k">معدل النمو عن الشهر السابق</div><div class="v">' + growthHtml(teamGrowth) + '</div><div class="s">' + (gPrev > 0 ? 'السابق: ' + money(gPrev) : 'لا يوجد شهر سابق للمقارنة') + '</div></div>' +
       (can('staff') ? '<div class="card"><div class="k">العمولة التقديرية</div><div class="v">' + money(tot.comm) + '</div><div class="s">' + (locked ? 'نهائية' : 'غير نهائية — تتغير مع المرتجعات') + '</div></div>' : '') +
       (can('staff') ? '<div class="card"><div class="k">بحاجة مراجعة</div><div class="v">' + num(S.reviewCount) + '</div><div class="s">طلب (كل الأشهر)</div></div>' : '') + '</div>';
     h += '<div class="grid2"><div class="panel"><h3>ترتيب المنافسة — نسبة تحقيق الهدف</h3>' + (lb.length ? '<div class="chartbox"><canvas id="cLb"></canvas></div>' : empty('لا توجد بيانات ترتيب')) + '</div>' +
       '<div class="panel"><h3>مسار التحقيق التراكمي مقابل المطلوب</h3>' + (ser.length || tot.tgt ? '<div class="chartbox"><canvas id="cPace"></canvas></div>' : empty('لا توجد بيانات')) + '<p class="note">المسار المطلوب خطي تقريبي على أيام الشهر.</p></div></div>';
+    h += '<div class="panel"><h3>اتجاه آخر 6 أشهر — المحقَّق مقابل الهدف</h3>' + (trend.some(function (t) { return Number(t.delivered) > 0 || Number(t.target) > 0; }) ? '<div class="chartbox"><canvas id="cTrend"></canvas></div>' : empty('لا توجد بيانات كافية بعد')) + '</div>';
     h += '<div class="panel"><div class="row" style="justify-content:space-between"><h3>أداء الموظفين</h3><button class="btn small" data-act="exp-dash" type="button">تصدير Excel</button></div>' +
       table([
         { h: 'الموظف', f: function (r) { return r.employee_name; } }, { h: 'الطلبات', num: 1, f: function (r) { return num(r.orders_count); } },
         { h: 'المحقَّق', num: 1, f: function (r) { return money(r.eligible_value); } }, { h: 'الهدف', num: 1, f: function (r) { return r.target == null ? '—' : money(r.target); } },
         { h: 'التحقيق', raw: 1, f: function (r) { return r.achievement == null ? '—' : '<div class="row"><div class="bar" style="width:90px"><i style="width:' + Math.min(100, r.achievement * 100) + '%;background:' + tierColor(r.achievement) + '"></i></div>' + pct(r.achievement) + '</div>'; } },
-        { h: 'العمولة', num: 1, f: function (r) { return money(r.commission); } }
+        { h: 'النمو', raw: 1, f: function (r) { var g = grBy[r.employee_id]; return growthHtml(g ? (g.growth == null ? null : Number(g.growth)) : null); } },
+        { h: 'للشريحة التالية', f: function (r) { return nextStep(r); } },
+        { h: 'العمولة', num: 1, f: function (r) { return money(r.commission); } },
+        { h: '', raw: 1, f: function (r) { return can('manage') && Number(r.achievement || 0) >= 0.5 ? '<button class="btn small" data-act="congrats" data-id="' + esc(r.employee_id) + '" type="button">تهنئة</button>' : ''; } }
       ], st, { empty: 'لا توجد بيانات لهذا الشهر' }) + '</div>';
     v.innerHTML = h; S._dash = st;
     if (lb.length) {
@@ -190,10 +203,25 @@
       S.charts.push(new Chart($('#cPace'), { type: 'line', data: { labels: labels, datasets: [{ label: 'المحقَّق', data: actual, borderColor: '#b8923a', backgroundColor: 'rgba(184,146,58,.15)', fill: true, tension: .2, pointRadius: 0 }, { label: 'المطلوب', data: req, borderColor: '#7a6f63', borderDash: [6, 4], pointRadius: 0 }] },
         options: { maintainAspectRatio: false, plugins: { legend: { rtl: true }, tooltip: { rtl: true } }, scales: { x: { reverse: true }, y: { position: 'right', beginAtZero: true } } } }));
     }
+    if ($('#cTrend')) {
+      S.charts.push(new Chart($('#cTrend'), { data: { labels: trend.map(function (t) { return monthLabel(t.month); }), datasets: [
+        { type: 'bar', label: 'المحقَّق', data: trend.map(function (t) { return Math.round(Number(t.delivered)); }), backgroundColor: '#b8923a', borderRadius: 5 },
+        { type: 'line', label: 'الهدف', data: trend.map(function (t) { return t.target == null ? null : Math.round(Number(t.target)); }), borderColor: '#4a423a', borderDash: [6, 4], pointRadius: 3, tension: .2 }] },
+        options: { maintainAspectRatio: false, plugins: { legend: { rtl: true }, tooltip: { rtl: true } }, scales: { x: { reverse: true }, y: { position: 'right', beginAtZero: true } } } }));
+    }
+  }
+  function congratsForm(id) {
+    var r = (S._dash || []).find(function (x) { return x.employee_id === id; }); if (!r) return; var e = S.empById[id] || {};
+    var a = Number(r.achievement || 0);
+    var txt = 'مبروك ' + r.employee_name + ' 🎉\nحققت ' + (a * 100).toFixed(0) + '% من هدف ' + monthLabel(S.month) + ' بمبيعات مُسلَّمة ' + num(r.eligible_value, 0) + ' ريال.\n' + (a >= 1 ? 'تجاوزت الهدف — أداء يُحتذى به.' : 'استمر، والشريحة التالية قريبة.') + '\nالعز للعود';
+    openDlg('رسالة تهنئة — ' + r.employee_name, '<label>نص الرسالة (عدّله كما تشاء)<textarea id="cgText" rows="6">' + esc(txt) + '</textarea></label>' +
+      '<div class="row"><button class="btn primary" data-act="cg-copy" type="button">نسخ النص</button><button class="btn" data-act="cg-wa" type="button">فتح واتساب</button>' +
+      (e.email ? '<button class="btn" data-act="cg-mail" data-to="' + esc(e.email) + '" type="button">فتح البريد</button>' : '') + '</div>' +
+      '<p class="note">النظام لا يرسل شيئاً بنفسه: يجهّز النص وأنت ترسله للموظف أو للمجموعة.' + (e.email ? '' : ' أضف بريد الموظف من «الموظفون والأكواد» ليظهر زر البريد.') + ' لا تذكر مبلغ العمولة قبل الاعتماد النهائي.</p>');
   }
 
   /* ---------- orders ---------- */
-  var ORDER_COLS = 'id,salla_order_id,reference_id,order_created_at,current_status,delivered_at,returned_at,subtotal,coupon_discount,special_discount,net_value,returned_value,coupon_code,assigned_salla_employee_id,by_code_employee_id,by_assigned_employee_id,employee_id,attribution_basis,source,selling_channel,is_eligible,review_status,review_reasons,review_note,reviewed_by,reviewed_at,import_source';
+  var ORDER_COLS = 'id,salla_order_id,reference_id,order_created_at,current_status,delivered_at,returned_at,subtotal,coupon_discount,special_discount,net_value,returned_value,coupon_code,assigned_salla_employee_id,by_code_employee_id,by_assigned_employee_id,employee_id,attribution_basis,source,selling_channel,is_eligible,review_status,review_reasons,review_note,reviewed_by,reviewed_at,import_source,delivered_estimated';
   function orderFilters() { var f = S.ofilter || (S.ofilter = { by: 'delivered', emp: '', review: '', basis: '', q: '', allm: false }); return f; }
   async function fetchOrders(page) {
     var f = orderFilters(); var col = f.by === 'created' ? 'order_created_at' : 'delivered_at';
@@ -240,7 +268,7 @@
     openDlg('طلب ' + o.salla_order_id,
       '<dl class="kv">' +
       '<dt>الرقم المرجعي</dt><dd>' + esc(o.reference_id || '—') + '</dd>' +
-      '<dt>تاريخ الطلب</dt><dd>' + fmtDT(o.order_created_at) + '</dd><dt>تاريخ التوصيل</dt><dd>' + fmtDT(o.delivered_at) + '</dd><dt>تاريخ الإرجاع</dt><dd>' + fmtDT(o.returned_at) + '</dd>' +
+      '<dt>تاريخ الطلب</dt><dd>' + fmtDT(o.order_created_at) + '</dd><dt>تاريخ التوصيل</dt><dd>' + fmtDT(o.delivered_at) + (o.delivered_estimated ? ' <span class="tag warn">تقديري — احتُسب عند إقفال الشهر</span>' : '') + '</dd><dt>تاريخ الإرجاع</dt><dd>' + fmtDT(o.returned_at) + '</dd>' +
       '<dt>الحالة</dt><dd>' + esc(o.current_status || '—') + '</dd>' +
       '<dt>المجموع الفرعي</dt><dd>' + money(o.subtotal) + '</dd><dt>خصم الكوبون</dt><dd>' + money(o.coupon_discount) + '</dd><dt>خصم خاص (لا يُخصم)</dt><dd>' + money(o.special_discount) + '</dd><dt>الصافي المعتمد للعمولة</dt><dd><b>' + money(o.net_value) + '</b></dd><dt>قيمة المرتجع</dt><dd>' + money(o.returned_value) + '</dd>' +
       '<dt>الكود المستخدم</dt><dd>' + esc(o.coupon_code || '—') + '</dd><dt>صاحب الكود</dt><dd>' + esc(empName(o.by_code_employee_id)) + '</dd>' +
@@ -384,7 +412,7 @@
   }
   async function vImport(v) {
     v.innerHTML = '<h2>استيراد Excel</h2><p class="note">الاستيراد آمن للتكرار: نفس رقم الطلب يُحدَّث ولا يتكرر. إذا وُجد خطأ في أي سطر لا يُحفظ شيء من ذلك الدفعة. الطلبات القادمة من مزامنة سلة لا تُستبدل بالاستيراد اليدوي.</p>' +
-      '<div class="grid2"><div class="panel"><h3>الطلبات</h3><div class="row"><button class="btn small" data-act="tpl-orders" type="button">تنزيل القالب</button></div><p><input type="file" id="fOrders" accept=".xlsx,.xls,.csv"></p><div id="pvOrders"></div></div>' +
+      '<div class="grid2"><div class="panel"><h3>الطلبات</h3><div class="row"><button class="btn small" data-act="tpl-orders" type="button">تنزيل القالب</button></div><p><input type="file" id="fOrders" accept=".xlsx,.xls,.csv"></p><label class="row"><input type="checkbox" id="impDefault" checked><span>الطلبات «تم التوصيل» التي بلا تاريخ توصيل تُحتسب في ' + monthLabel(S.month) + ' (الشهر المختار أعلى الصفحة). غير المُسلَّم يُرحَّل تلقائياً.</span></label><div id="pvOrders"></div></div>' +
       '<div class="panel"><h3>التسجيل اليومي</h3><div class="row"><button class="btn small" data-act="tpl-daily" type="button">تنزيل القالب</button></div><p><input type="file" id="fDaily" accept=".xlsx,.xls,.csv"></p><div id="pvDaily"></div></div></div>';
   }
   async function readFile(file) {
@@ -408,14 +436,14 @@
   }
   async function doImport(kind, btn) {
     var rows = S['_imp_' + kind]; if (!rows || !rows.length) return; var out = $('#res_' + kind); btn.disabled = true; out.innerHTML = '<p class="note">جارٍ الاستيراد…</p>';
-    var ins = 0, upd = 0, skip = 0, saved = 0;
+    var ins = 0, upd = 0, skip = 0, saved = 0, estN = 0;
     for (var i = 0; i < rows.length; i += 400) {
       var chunk = rows.slice(i, i + 400);
-      var r = await rpc(kind === 'orders' ? 'ps_import_orders' : 'ps_import_daily', kind === 'orders' ? { p_rows: chunk, p_source: 'import' } : { p_rows: chunk });
+      var r = await rpc(kind === 'orders' ? 'ps_import_orders' : 'ps_import_daily', kind === 'orders' ? { p_rows: chunk, p_source: 'import', p_default_delivery: ($('#impDefault') && $('#impDefault').checked) ? monthEnd(S.month) : null } : { p_rows: chunk });
       if (!r.ok) { out.innerHTML = '<div class="tag bad" style="display:block;white-space:normal">لم تُحفظ هذه الدفعة (من السطر ' + (i + 1) + '):<br>' + r.errors.slice(0, 12).map(function (e) { return esc('سطر ' + (i + e.row + 1) + ': ' + e.msg); }).join('<br>') + '</div><p class="note">ما سبق من دفعات محفوظ، وإعادة الاستيراد بعد التصحيح آمنة.</p>'; btn.disabled = false; return; }
-      ins += r.inserted || 0; upd += r.updated || 0; skip += r.skipped_sync || 0; saved += r.saved || 0;
+      ins += r.inserted || 0; upd += r.updated || 0; skip += r.skipped_sync || 0; saved += r.saved || 0; estN += r.estimated_delivery || 0;
     }
-    out.innerHTML = '<div class="tag ok" style="display:block;white-space:normal">' + (kind === 'orders' ? 'تم: جديد ' + ins + ' — محدَّث ' + upd + (skip ? ' — تجاوُز (من سلة) ' + skip : '') : 'تم حفظ ' + saved + ' سجل') + '</div>';
+    out.innerHTML = '<div class="tag ok" style="display:block;white-space:normal">' + (kind === 'orders' ? 'تم: جديد ' + ins + ' — محدَّث ' + upd + (skip ? ' — تجاوُز (من سلة) ' + skip : '') + (estN ? ' — بتاريخ توصيل تقديري ' + estN : '') : 'تم حفظ ' + saved + ' سجل') + '</div>';
     refreshFlags();
   }
   function downloadTemplate(kind) {
@@ -511,16 +539,18 @@
       { h: 'الاسم', f: function (e) { return e.name; } }, { h: 'الحالة', raw: 1, f: function (e) { return tag(e.is_active ? 'فعّال' : 'موقوف', e.is_active ? 'ok' : ''); } }, { h: 'التأكيد', raw: 1, f: function (e) { return tag(e.confirm_status === 'confirmed' ? 'مؤكد' : 'بانتظار التأكيد', e.confirm_status === 'confirmed' ? 'ok' : 'warn'); } },
       { h: 'الوزن', num: 1, f: function (e) { return e.share_weight; } }, { h: 'بداية', f: function (e) { return e.start_date || '—'; } }, { h: 'نهاية', f: function (e) { return e.end_date || '—'; } },
       { h: 'الأكواد', f: function (e) { return codes.filter(function (c) { return c.employee_id === e.id; }).map(function (c) { return c.code + (c.confirm_status === 'pending' ? '؟' : ''); }).join('، ') || '—'; } },
-      { h: '', raw: 1, f: function (e) { return can('manage') ? '<button class="btn small" data-act="emp-edit" data-id="' + e.id + '" type="button">تعديل</button>' : ''; } }], emps) + '</div>' +
+      { h: 'البريد', f: function (e) { return e.email || '—'; } },
+      { h: '', raw: 1, f: function (e) { return can('manage') ? '<button class="btn small" data-act="emp-edit" data-id="' + e.id + '" type="button">تعديل</button> ' + (e.end_date ? '' : '<button class="btn small" data-act="emp-end" data-id="' + e.id + '" type="button">إنهاء خدمة</button> ') + '<button class="btn small bad" data-act="emp-del" data-id="' + e.id + '" type="button">حذف</button>' : ''; } }], emps) + '<p class="note">«إنهاء خدمة» يحفظ سجل الموظف وعمولاته السابقة ويخرجه من توزيع الأهداف بعد تاريخ النهاية. «حذف» متاح فقط لمن أُضيف بالخطأ وليس له أي طلب أو سجل.</p>' + '</div>' +
       '<div class="panel"><div class="row" style="justify-content:space-between"><h3>أكواد الخصم</h3>' + (can('manage') ? '<button class="btn small gold" data-act="code-new" type="button">+ كود</button>' : '') + '</div><p class="note">الكود غير المؤكد لا يُنسب له أي طلب ويذهب الطلب للمراجعة.</p>' + table([
         { h: 'الكود', f: function (c) { return c.code; } }, { h: 'الموظف', f: function (c) { return empName(c.employee_id); } }, { h: 'الحالة', raw: 1, f: function (c) { return tag(c.is_active ? 'فعّال' : 'موقوف', c.is_active ? 'ok' : ''); } }, { h: 'التأكيد', raw: 1, f: function (c) { return tag(c.confirm_status === 'confirmed' ? 'مؤكد' : 'بانتظار التأكيد', c.confirm_status === 'confirmed' ? 'ok' : 'warn'); } },
         { h: '', raw: 1, f: function (c) { return can('manage') ? '<button class="btn small" data-act="code-edit" data-id="' + c.id + '" type="button">تعديل</button>' : ''; } }], codes) + '</div>' +
       '<div class="panel"><h3>ربط موظفي سلة</h3><p class="note">يُستخدم عند تفعيل المزامنة لمطابقة «الموظف المسند» في سلة مع الموظف هنا.</p>' + table([{ h: 'معرّف موظف سلة', f: function (r) { return r.salla_employee_id; } }, { h: 'الموظف', f: function (r) { return empName(r.employee_id); } }], sal, { empty: 'لا يوجد ربط بعد (يُضاف عند المرحلة 1)' }) + '</div>';
   }
+  async function reloadEmps() { var e = await S.sb.from('ps_employees').select('*').order('name'); S.emps = e.data || []; S.empById = {}; S.emps.forEach(function (x) { S.empById[x.id] = x; }); }
   function empForm(e) {
     e = e || {}; openDlg(e.id ? 'تعديل موظف' : 'موظف جديد', '<form class="form" id="dForm" data-submit="emp" data-id="' + esc(e.id || '') + '"><div class="formgrid">' +
       '<label>الاسم<input name="name" required value="' + esc(e.name || '') + '"></label><label>الوزن (للتوزيع)<input type="number" step="0.001" min="0.001" name="share_weight" value="' + esc(e.share_weight || 1) + '"></label>' +
-      '<label>تاريخ البداية<input type="date" name="start_date" value="' + esc(e.start_date || '') + '"></label><label>تاريخ النهاية<input type="date" name="end_date" value="' + esc(e.end_date || '') + '"></label>' +
+      '<label>البريد الإلكتروني (اختياري)<input type="email" name="email" dir="ltr" value="' + esc(e.email || '') + '"></label><label>تاريخ البداية<input type="date" name="start_date" value="' + esc(e.start_date || '') + '"></label><label>تاريخ النهاية<input type="date" name="end_date" value="' + esc(e.end_date || '') + '"></label>' +
       '<label>التأكيد<select name="confirm_status"><option value="confirmed"' + (e.confirm_status !== 'pending' ? ' selected' : '') + '>مؤكد</option><option value="pending"' + (e.confirm_status === 'pending' ? ' selected' : '') + '>بانتظار التأكيد</option></select></label>' +
       '<label>الحالة<select name="is_active"><option value="true"' + (e.is_active !== false ? ' selected' : '') + '>فعّال</option><option value="false"' + (e.is_active === false ? ' selected' : '') + '>موقوف</option></select></label></div><button class="btn primary" type="submit">حفظ</button></form>');
   }
@@ -576,6 +606,12 @@
     'rule-req': function (el) { busy(el, async function () { await rpc('ps_decide_rule', { p_version: Number(el.dataset.v), p_decision: 'request', p_note: null }); toast('أُرسلت للمدير التنفيذي', 'ok'); render(); }); },
     'rule-dec': function (el) { busy(el, async function () { await rpc('ps_decide_rule', { p_version: Number(el.dataset.v), p_decision: el.dataset.d, p_note: null }); toast('تم', 'ok'); render(); }); },
     'confirm-rules': function (el) { var on = el.dataset.v === '1'; openDlg(on ? 'تأكيد القواعد كتابياً' : 'سحب التأكيد', '<form class="form" id="dForm" data-submit="confirm-rules" data-v="' + (on ? 1 : 0) + '"><label>مرجع التأكيد الكتابي (رقم/تاريخ/مستند)<input name="note" required></label><button class="btn primary" type="submit">حفظ</button></form>'); },
+    congrats: function (el) { congratsForm(el.dataset.id); },
+    'cg-copy': function () { var t = $('#cgText'); if (navigator.clipboard && navigator.clipboard.writeText) { navigator.clipboard.writeText(t.value).then(function () { toast('تم النسخ', 'ok'); }, function () { t.select(); toast('حدد النص وانسخه يدوياً'); }); } else { t.select(); toast('حدد النص وانسخه يدوياً'); } },
+    'cg-wa': function () { window.open('https://wa.me/?text=' + encodeURIComponent($('#cgText').value), '_blank', 'noopener'); },
+    'cg-mail': function (el) { window.location.href = 'mailto:' + el.dataset.to + '?subject=' + encodeURIComponent('تهنئة على الأداء — ' + monthLabel(S.month)) + '&body=' + encodeURIComponent($('#cgText').value); },
+    'emp-end': function (el) { var e = S.empById[el.dataset.id]; openDlg('إنهاء خدمة — ' + e.name, '<form class="form" id="dForm" data-submit="emp-end" data-id="' + esc(e.id) + '"><label>آخر يوم عمل<input type="date" name="end_date" required value="' + todayRiyadh() + '"></label><p class="note">يبقى سجله وعمولاته السابقة. أكواده تتوقف، وأي طلب جديد عليها يذهب للمراجعة.</p><button class="btn bad" type="submit">تأكيد إنهاء الخدمة</button></form>'); },
+    'emp-del': function (el) { if (el.dataset.sure !== '1') { el.dataset.sure = '1'; el.textContent = 'تأكيد الحذف؟'; return; } busy(el, async function () { var c = await S.sb.from('ps_discount_codes').delete().eq('employee_id', el.dataset.id); if (c.error) throw c.error; var r = await S.sb.from('ps_employees').delete().eq('id', el.dataset.id).select('id'); if (r.error) throw r.error; if (!r.data || !r.data.length) throw new Error('لم يُحذف — تحقق من الصلاحية'); await reloadEmps(); toast('تم الحذف', 'ok'); render(); }); },
     'emp-new': function () { empForm(); }, 'emp-edit': function (el) { empForm(S.empById[el.dataset.id]); },
     'code-new': function () { codeForm(); }, 'code-edit': function (el) { codeForm((S._codes || []).find(function (c) { return c.id === el.dataset.id; })); }
   };
@@ -608,9 +644,14 @@
     },
     'confirm-rules': async function (f) { await rpc('ps_set_rules_confirmed', { p_value: f.dataset.v === '1', p_note: val(f, 'note') }); toast('تم', 'ok'); closeDlg(); await refreshFlags(); render(); },
     emp: async function (f) {
-      var row = { name: val(f, 'name').trim(), share_weight: Number(val(f, 'share_weight')), start_date: val(f, 'start_date') || null, end_date: val(f, 'end_date') || null, confirm_status: val(f, 'confirm_status'), is_active: val(f, 'is_active') === 'true' };
+      var row = { name: val(f, 'name').trim(), email: val(f, 'email').trim() || null, share_weight: Number(val(f, 'share_weight')), start_date: val(f, 'start_date') || null, end_date: val(f, 'end_date') || null, confirm_status: val(f, 'confirm_status'), is_active: val(f, 'is_active') === 'true' };
       var q = f.dataset.id ? S.sb.from('ps_employees').update(row).eq('id', f.dataset.id) : S.sb.from('ps_employees').insert(row); var r = await q; if (r.error) throw r.error;
       var e = await S.sb.from('ps_employees').select('*').order('name'); S.emps = e.data || []; S.empById = {}; S.emps.forEach(function (x) { S.empById[x.id] = x; }); toast('تم الحفظ', 'ok'); closeDlg(); render();
+    },
+    'emp-end': async function (f) {
+      var r = await S.sb.from('ps_employees').update({ end_date: val(f, 'end_date') }).eq('id', f.dataset.id); if (r.error) throw r.error;
+      var c = await S.sb.from('ps_discount_codes').update({ is_active: false }).eq('employee_id', f.dataset.id); if (c.error) throw c.error;
+      await reloadEmps(); toast('تم إنهاء الخدمة', 'ok'); closeDlg(); render();
     },
     code: async function (f) {
       var row = { code: val(f, 'code').trim(), employee_id: val(f, 'employee_id'), confirm_status: val(f, 'confirm_status'), is_active: val(f, 'is_active') === 'true' };

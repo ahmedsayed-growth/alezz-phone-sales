@@ -94,5 +94,12 @@ tr.clk{cursor:pointer}tr.clk:hover td{background:#fbf8f2}
 input[type=file]{width:100%;max-width:100%;min-height:0;padding:.4rem}
 .top .btn{color:var(--ink);background:#fff}
 .logo{display:block;width:210px;max-width:70%;height:auto;margin:0 auto .8rem}
-.logo-top{height:30px;width:auto;filter:invert(1);margin-inline-end:.2rem}
+.logo-top{height:40px;width:auto;filter:invert(1);margin-inline-end:.2rem}
 .top{justify-content:flex-start}.top .top-r{margin-inline-start:auto}
+.gr{font-weight:700;direction:ltr;display:inline-block}.gr.up{color:var(--ok)}.gr.dn{color:var(--bad)}
+@keyframes psIn{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}
+.view>*{animation:psIn .35s ease both}.view>*:nth-child(2){animation-delay:.04s}.view>*:nth-child(3){animation-delay:.08s}.view>*:nth-child(4){animation-delay:.12s}.view>*:nth-child(n+5){animation-delay:.16s}
+.card{transition:transform .15s ease,box-shadow .15s ease}.card:hover{transform:translateY(-2px);box-shadow:0 6px 18px rgba(0,0,0,.07)}
+@keyframes psBar{from{width:0}}.bar i{animation:psBar .7s ease both}
+.dlg-box{animation:psIn .2s ease both}.btn{transition:background .15s,border-color .15s,transform .05s}.btn:active{transform:scale(.98)}
+@media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
